@@ -104,6 +104,7 @@ typedef NS_ENUM(NSInteger, VLCObjectType) {
     VLCAboutWindowController *_aboutWindowController;
     VLCHelpWindowController  *_helpWindowController;
     VLCAddonsWindowController *_addonsController;
+    NSMenuItem *_newVLCInstanceItem;
     NSMenuItem *_openFileInNewInstanceItem;
     VLCPlayQueueController *_playQueueController;
     VLCPlayerController *_playerController;
@@ -148,6 +149,13 @@ typedef NS_ENUM(NSInteger, VLCObjectType) {
     [_checkForUpdate setEnabled:NO];
 #endif
 
+    _newVLCInstanceItem =
+        [[NSMenuItem alloc] initWithTitle:@""
+                                   action:@selector(newVLCInstance:)
+                            keyEquivalent:@"n"];
+    _newVLCInstanceItem.target = self;
+    _newVLCInstanceItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+
     _openFileInNewInstanceItem =
         [[NSMenuItem alloc] initWithTitle:@""
                                    action:@selector(openFileInNewInstance:)
@@ -155,8 +163,12 @@ typedef NS_ENUM(NSInteger, VLCObjectType) {
     _openFileInNewInstanceItem.target = self;
     const NSInteger openFileIndex = [_fileMenu indexOfItem:_open_file];
     if (openFileIndex != -1) {
+        [_fileMenu insertItem:_newVLCInstanceItem atIndex:openFileIndex];
         [_fileMenu insertItem:_openFileInNewInstanceItem atIndex:openFileIndex + 1];
     }
+
+    _open_net.keyEquivalent = @"n";
+    _open_net.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
 
     [self initStrings];
     [self setupKeyboardShortcuts];
@@ -358,6 +370,7 @@ typedef NS_ENUM(NSInteger, VLCObjectType) {
      * This remains until the present day and does not affect the Windows world. */
      /* xgettext: Label for the macOS main "File" menu */
     [_fileMenu setTitle: _PNS("macOS MainMenu", "File")];
+    [_newVLCInstanceItem setTitle:_NS("New VLC Instance")];
     [_open_generic setTitle: _NS("Advanced Open File...")];
     [_open_file setTitle: _NS("Open File...")];
     [_openFileInNewInstanceItem setTitle:_NS("Open File in New Instance...")];
@@ -1333,6 +1346,48 @@ typedef NS_ENUM(NSInteger, VLCObjectType) {
     }];
 }
 
+- (BOOL)launchNewInstanceWithURLs:(NSArray<NSURL *> *)urls error:(NSError * __autoreleasing *)error
+{
+    NSURL * const bundleURL = NSBundle.mainBundle.bundleURL;
+    if (bundleURL == nil) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:NSCocoaErrorDomain
+                                         code:NSFileNoSuchFileError
+                                     userInfo:@{
+                                         NSLocalizedDescriptionKey: _NS("The VLC application bundle could not be located.")
+                                     }];
+        }
+        return NO;
+    }
+
+    NSMutableArray<NSString *> * const arguments = [NSMutableArray arrayWithObjects:
+        @"-na",
+        bundleURL.path,
+        nil];
+    for (NSURL * const url in urls) {
+        [arguments addObject:url.isFileURL ? url.path : url.absoluteString];
+    }
+
+    NSTask * const task = [[NSTask alloc] init];
+    task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/open"];
+    task.arguments = arguments;
+    return [task launchAndReturnError:error];
+}
+
+- (IBAction)newVLCInstance:(id)sender
+{
+    NSError *error = nil;
+    if ([self launchNewInstanceWithURLs:@[] error:&error]) {
+        return;
+    }
+
+    NSAlert * const alert = [[NSAlert alloc] init];
+    alert.alertStyle = NSAlertStyleWarning;
+    alert.messageText = _NS("Unable to Open New VLC Instance");
+    alert.informativeText = error.localizedDescription ?: _NS("A separate VLC process could not be opened.");
+    [alert runModal];
+}
+
 - (IBAction)openFileInNewInstance:(id)sender
 {
     NSOpenPanel *openPanel = [NSOpenPanel openPanel];
@@ -1345,28 +1400,10 @@ typedef NS_ENUM(NSInteger, VLCObjectType) {
         return;
     }
 
-    NSURL * const bundleURL = NSBundle.mainBundle.bundleURL;
-    if (bundleURL == nil) {
-        NSAlert * const alert = [[NSAlert alloc] init];
-        alert.alertStyle = NSAlertStyleWarning;
-        alert.messageText = _NS("Unable to Open New VLC Instance");
-        alert.informativeText = _NS("The VLC application bundle could not be located.");
-        [alert runModal];
-        return;
-    }
-
     NSError *launchError = nil;
     for (NSURL * const url in openPanel.URLs) {
-        NSTask * const task = [[NSTask alloc] init];
-        task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/open"];
-        task.arguments = @[
-            @"-na",
-            bundleURL.path,
-            url.isFileURL ? url.path : url.absoluteString
-        ];
-
         NSError *error = nil;
-        if ([task launchAndReturnError:&error]) {
+        if ([self launchNewInstanceWithURLs:@[url] error:&error]) {
             continue;
         }
 
