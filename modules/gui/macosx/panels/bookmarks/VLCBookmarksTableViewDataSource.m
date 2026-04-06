@@ -138,6 +138,8 @@ static const struct vlc_thumbnailer_to_files_cbs bookmarkThumbnailCallbacks = {
 }
 
 - (void)resetThumbnailState;
+- (nullable VLCMediaLibraryMediaItem *)mediaItemForCurrentPlaybackCreatingIfNeeded:(BOOL)createIfNeeded;
+- (void)updateLibraryItemIdCreatingIfNeeded:(BOOL)createIfNeeded;
 - (NSString *)thumbnailCacheKeyForBookmark:(VLCBookmark *)bookmark;
 - (NSString *)thumbnailCacheDirectoryPath;
 - (NSString *)thumbnailFilePathForBookmark:(VLCBookmark *)bookmark;
@@ -388,14 +390,47 @@ static const struct vlc_thumbnailer_to_files_cbs bookmarkThumbnailCallbacks = {
     }
 }
 
-- (void)updateLibraryItemId
+- (nullable VLCMediaLibraryMediaItem *)mediaItemForCurrentPlaybackCreatingIfNeeded:(BOOL)createIfNeeded
 {
-    VLCMediaLibraryMediaItem * const currentMediaItem = [VLCMediaLibraryMediaItem mediaItemForURL:_playerController.URLOfCurrentMediaItem];
+    if (_mediaLibrary == NULL) {
+        return nil;
+    }
+
+    VLCInputItem * const currentInputItem = _playerController.currentMedia;
+    if (currentInputItem == nil) {
+        return nil;
+    }
+
+    NSString * const mediaMRL = currentInputItem.MRL;
+    if (mediaMRL.length == 0) {
+        return nil;
+    }
+
+    vlc_ml_media_t *vlcMediaItem = vlc_ml_get_media_by_mrl(_mediaLibrary, mediaMRL.UTF8String);
+    if (vlcMediaItem == NULL && createIfNeeded) {
+        vlcMediaItem = currentInputItem.isStream ?
+            vlc_ml_new_stream(_mediaLibrary, mediaMRL.UTF8String) :
+            vlc_ml_new_external_media(_mediaLibrary, mediaMRL.UTF8String);
+    }
+    if (vlcMediaItem == NULL) {
+        return nil;
+    }
+
+    const int64_t mediaId = vlcMediaItem->i_id;
+    vlc_ml_media_release(vlcMediaItem);
+    return [VLCMediaLibraryMediaItem mediaItemForLibraryID:mediaId];
+}
+
+- (void)updateLibraryItemIdCreatingIfNeeded:(BOOL)createIfNeeded
+{
+    VLCMediaLibraryMediaItem * const currentMediaItem =
+        [self mediaItemForCurrentPlaybackCreatingIfNeeded:createIfNeeded];
     if (currentMediaItem == nil) {
         _currentMediaItem = nil;
-        _libraryItemId = -1;
-        [self resetThumbnailState];
-        [self updateBookmarks];
+        if (_libraryItemId > 0) {
+            [self resetThumbnailState];
+        }
+        [self setLibraryItemId:-1];
         return;
     }
 
@@ -405,7 +440,11 @@ static const struct vlc_thumbnailer_to_files_cbs bookmarkThumbnailCallbacks = {
     }
     _currentMediaItem = currentMediaItem;
     [self setLibraryItemId:currentMediaItemId];
-    [self updateBookmarks];
+}
+
+- (void)updateLibraryItemId
+{
+    [self updateLibraryItemIdCreatingIfNeeded:NO];
 }
 
 - (void)updateBookmarks
@@ -528,18 +567,32 @@ static const struct vlc_thumbnailer_to_files_cbs bookmarkThumbnailCallbacks = {
 
 - (void)addBookmark
 {
-    if (_libraryItemId <= 0) {
+    const vlc_tick_t currentTime = _playerController.time;
+    if (currentTime == VLC_TICK_INVALID || currentTime < VLC_TICK_0) {
+        msg_Warn(getIntf(), "Unable to bookmark the current media because the playback time is not available yet");
         return;
     }
 
-    const vlc_tick_t currentTime = _playerController.time;
+    [self updateLibraryItemIdCreatingIfNeeded:YES];
+
+    if (_libraryItemId <= 0 || _currentMediaItem == nil) {
+        msg_Warn(getIntf(), "Unable to bookmark the current media because no media library entry could be resolved");
+        return;
+    }
+
     const int64_t bookmarkTime = MS_FROM_VLC_TICK(currentTime);
-    vlc_ml_media_add_bookmark(_mediaLibrary, _libraryItemId, bookmarkTime);
-    vlc_ml_media_update_bookmark(_mediaLibrary,
-                                 _libraryItemId,
-                                 bookmarkTime,
-                                 [_NS("New bookmark") UTF8String],
-                                 [_NS("Description of new bookmark.") UTF8String]);
+    if (vlc_ml_media_add_bookmark(_mediaLibrary, _libraryItemId, bookmarkTime) != VLC_SUCCESS) {
+        msg_Warn(getIntf(), "Unable to bookmark media %lld at time %lld", _libraryItemId, bookmarkTime);
+        return;
+    }
+
+    if (vlc_ml_media_update_bookmark(_mediaLibrary,
+                                     _libraryItemId,
+                                     bookmarkTime,
+                                     [_NS("New bookmark") UTF8String],
+                                     [_NS("Description of new bookmark.") UTF8String]) != VLC_SUCCESS) {
+        msg_Warn(getIntf(), "Unable to set metadata for bookmark %lld on media %lld", bookmarkTime, _libraryItemId);
+    }
 
     [self updateBookmarks];
 }
