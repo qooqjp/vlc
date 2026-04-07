@@ -55,6 +55,10 @@
     VLCBookmarksTableViewDataSource *_tableViewDataSource;
     VLCBookmarksTableViewDelegate *_tableViewDelegate;
 }
+
+- (BOOL)launchBookmarkInNewInstance:(VLCBookmark *)bookmark
+                              error:(NSError * __autoreleasing *)error;
+- (void)presentBookmarkLaunchError:(nullable NSError *)error;
 @end
 
 @implementation VLCBookmarksWindowController
@@ -111,6 +115,19 @@
         [_dataTable moveColumn:(_dataTable.numberOfColumns - 1) toColumn:0];
     }
 
+    NSTableColumn *mediaColumn =
+        [_dataTable tableColumnWithIdentifier:VLCBookmarksTableViewMediaTableColumnIdentifier];
+    if (mediaColumn == nil) {
+        mediaColumn =
+            [[NSTableColumn alloc] initWithIdentifier:VLCBookmarksTableViewMediaTableColumnIdentifier];
+        mediaColumn.width = 220.;
+        mediaColumn.minWidth = 180.;
+        mediaColumn.maxWidth = 320.;
+
+        [_dataTable addTableColumn:mediaColumn];
+        [_dataTable moveColumn:(_dataTable.numberOfColumns - 1) toColumn:1];
+    }
+
     /* main window */
     [self.window setTitle: _NS("Bookmarks")];
     [_addButton setTitle: _NS("Add")];
@@ -118,6 +135,8 @@
     [_removeButton setTitle: _NS("Remove")];
     [[[_dataTable tableColumnWithIdentifier:VLCBookmarksTableViewThumbnailTableColumnIdentifier] headerCell]
      setStringValue:_NS("Preview")];
+    [[[_dataTable tableColumnWithIdentifier:VLCBookmarksTableViewMediaTableColumnIdentifier] headerCell]
+     setStringValue:_NS("Media")];
     [[[_dataTable tableColumnWithIdentifier:VLCBookmarksTableViewNameTableColumnIdentifier] headerCell]
      setStringValue: _NS("Name")];
     [[[_dataTable tableColumnWithIdentifier:VLCBookmarksTableViewDescriptionTableColumnIdentifier] headerCell]
@@ -169,7 +188,19 @@
     vlc_tick_t bookmarkTime = VLC_TICK_FROM_MS(bookmark.bookmarkTime);
 
     VLCPlayerController * const playerController = VLCMain.sharedInstance.playQueueController.playerController;
-    [playerController setTimeFast:bookmarkTime];
+    VLCInputItem * const currentMedia = playerController.currentMedia;
+    const BOOL currentPlaybackMatchesBookmark =
+        (currentMedia.MRL.length > 0 && [currentMedia.MRL isEqualToString:bookmark.mediaMRL]) ||
+        bookmark.mediaLibraryItemId == _tableViewDataSource.libraryItemId;
+    if (currentPlaybackMatchesBookmark) {
+        [playerController setTimeFast:bookmarkTime];
+        return;
+    }
+
+    NSError *error = nil;
+    if (![self launchBookmarkInNewInstance:bookmark error:&error]) {
+        [self presentBookmarkLaunchError:error];
+    }
 }
 
 - (IBAction)remove:(id)sender
@@ -205,7 +236,11 @@
         VLCBookmark * const bookmark = bookmarks[index];
         NSString * const name = bookmark.bookmarkName;
         NSString * const time = [NSString stringWithTime:bookmark.bookmarkTime / 1000];
-        NSString * const message = [NSString stringWithFormat:@"%@ - %@", name, time];
+        NSString * const mediaTitle = bookmark.mediaTitle;
+        NSString * const message =
+            mediaTitle.length > 0 ?
+                [NSString stringWithFormat:@"%@ - %@ - %@", mediaTitle, name, time] :
+                [NSString stringWithFormat:@"%@ - %@", name, time];
         [pasteBoard writeObjects:@[message]];
 
         /* Get next index */
@@ -237,6 +272,57 @@
 - (void)toggleRowDependentButtonsEnabled:(BOOL)enabled
 {
     _removeButton.enabled = enabled;
+}
+
+- (BOOL)launchBookmarkInNewInstance:(VLCBookmark *)bookmark
+                              error:(NSError * __autoreleasing *)error
+{
+    NSURL * const bundleURL = NSBundle.mainBundle.bundleURL;
+    if (bundleURL == nil) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:NSCocoaErrorDomain
+                                         code:NSFileNoSuchFileError
+                                     userInfo:@{
+                                         NSLocalizedDescriptionKey: _NS("The VLC application bundle could not be located.")
+                                     }];
+        }
+        return NO;
+    }
+
+    NSURL * const mediaURL = [NSURL URLWithString:bookmark.mediaMRL];
+    if (mediaURL == nil) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:NSCocoaErrorDomain
+                                         code:NSFileReadUnknownError
+                                     userInfo:@{
+                                         NSLocalizedDescriptionKey: _NS("The bookmark media location is invalid.")
+                                     }];
+        }
+        return NO;
+    }
+
+    NSString * const mediaLocation = mediaURL.isFileURL ? mediaURL.path : mediaURL.absoluteString;
+    NSMutableArray<NSString *> * const arguments = [NSMutableArray arrayWithObjects:
+        @"-na",
+        bundleURL.path,
+        mediaLocation,
+        @"--args",
+        [NSString stringWithFormat:@"--start-time=%.3f", bookmark.bookmarkTime / 1000.0],
+        nil];
+
+    NSTask * const task = [[NSTask alloc] init];
+    task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/open"];
+    task.arguments = arguments;
+    return [task launchAndReturnError:error];
+}
+
+- (void)presentBookmarkLaunchError:(nullable NSError *)error
+{
+    NSAlert * const alert = [[NSAlert alloc] init];
+    alert.alertStyle = NSAlertStyleWarning;
+    alert.messageText = _NS("Unable to Open Bookmark");
+    alert.informativeText = error.localizedDescription ?: _NS("The selected bookmark could not be opened in a separate VLC window.");
+    [alert runModal];
 }
 
 @end

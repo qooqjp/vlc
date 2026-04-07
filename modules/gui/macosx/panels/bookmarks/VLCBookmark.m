@@ -28,12 +28,21 @@
 
 + (instancetype)bookmarkWithVlcBookmark:(vlc_ml_bookmark_t)vlcBookmark
 {
+    return [self bookmarkWithVlcBookmark:vlcBookmark mediaTitle:@"" mediaMRL:@""];
+}
+
++ (instancetype)bookmarkWithVlcBookmark:(vlc_ml_bookmark_t)vlcBookmark
+                             mediaTitle:(NSString *)mediaTitle
+                               mediaMRL:(NSString *)mediaMRL
+{
     VLCBookmark * const bookmark = [[VLCBookmark alloc] init];
     
     bookmark->_mediaLibraryItemId = vlcBookmark.i_media_id;
+    bookmark->_mediaTitle = [mediaTitle copy] ?: @"";
+    bookmark->_mediaMRL = [mediaMRL copy] ?: @"";
     bookmark.bookmarkTime = vlcBookmark.i_time;
-    bookmark.bookmarkName = toNSStr(vlcBookmark.psz_name);
-    bookmark.bookmarkDescription = toNSStr(vlcBookmark.psz_description);
+    bookmark.bookmarkName = toNSStr(vlcBookmark.psz_name) ?: @"";
+    bookmark.bookmarkDescription = toNSStr(vlcBookmark.psz_description) ?: @"";
 
     return bookmark;
 }
@@ -43,6 +52,8 @@
     VLCBookmark * const bookmarkCopy = [[VLCBookmark alloc] init];
 
     bookmarkCopy->_mediaLibraryItemId = self.mediaLibraryItemId;
+    bookmarkCopy->_mediaTitle = self.mediaTitle;
+    bookmarkCopy->_mediaMRL = self.mediaMRL;
     bookmarkCopy.bookmarkTime = self.bookmarkTime;
     bookmarkCopy.bookmarkName = self.bookmarkName;
     bookmarkCopy.bookmarkDescription = self.bookmarkDescription;

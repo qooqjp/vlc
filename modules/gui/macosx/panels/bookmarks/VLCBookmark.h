@@ -29,8 +29,13 @@ NS_ASSUME_NONNULL_BEGIN
 @interface VLCBookmark : NSObject<NSCopying>
 
 + (instancetype)bookmarkWithVlcBookmark:(vlc_ml_bookmark_t)vlcBookmark;
++ (instancetype)bookmarkWithVlcBookmark:(vlc_ml_bookmark_t)vlcBookmark
+                             mediaTitle:(NSString *)mediaTitle
+                               mediaMRL:(NSString *)mediaMRL;
 
 @property (readonly) int64_t mediaLibraryItemId;
+@property (readonly, copy) NSString *mediaTitle;
+@property (readonly, copy) NSString *mediaMRL;
 @property (readwrite, assign) int64_t bookmarkTime;
 @property (readwrite) NSString *bookmarkName;
 @property (readwrite) NSString *bookmarkDescription;

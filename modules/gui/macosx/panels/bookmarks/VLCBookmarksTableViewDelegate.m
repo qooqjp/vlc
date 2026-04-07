@@ -57,4 +57,16 @@
     [_parentController toggleRowDependentButtonsEnabled:enableRowDependentBookmarkWindowButtons];
 }
 
+- (BOOL)tableView:(NSTableView *)tableView
+shouldEditTableColumn:(NSTableColumn *)tableColumn
+              row:(NSInteger)row
+{
+    (void)tableView;
+    (void)row;
+
+    NSString * const identifier = tableColumn.identifier;
+    return ![identifier isEqualToString:VLCBookmarksTableViewThumbnailTableColumnIdentifier] &&
+           ![identifier isEqualToString:VLCBookmarksTableViewMediaTableColumnIdentifier];
+}
+
 @end
