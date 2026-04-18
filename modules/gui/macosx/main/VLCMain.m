@@ -397,6 +397,10 @@ static VLCMain *sharedInstance = nil;
     }
     [notiticationCenter removeObserver: self];
 
+    // Release controllers that hold media-library callbacks before libvlc
+    // tears the library down, otherwise libvlc_MlRelease asserts.
+    _bookmarks = nil;
+
     // closes all open vouts
     _voutProvider = nil;
     _continuityController = nil;

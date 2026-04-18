@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(log show:*)",
+      "Bash(ls -lt ~/Library/Logs/DiagnosticReports/VLC*)",
+      "Bash(python3 -c ':*)",
+      "Bash(python3:*)",
+      "Bash(ps -p 74020 -o pid,command)",
+      "Bash(grep -E \"\\\\.dylib$\")",
+      "Bash(grep -l \"VLC-dev\" extras/package/macosx/*.sh)",
+      "Bash(ps -p 74020 -o pid,etime,state)",
+      "Bash(ls modules/gui/macosx/main/*.o)",
+      "Bash(make -C modules libmacosx_plugin.la)",
+      "Bash(make -C modules libmedialibrary_plugin.la)",
+      "Bash(ps -p 74020 -o pid,state)",
+      "Bash(cp -v modules/.libs/libmacosx_plugin.dylib VLC.app/Contents/Frameworks/plugins/libmacosx_plugin.dylib)",
+      "Bash(cp -v modules/.libs/libmacosx_plugin.dylib /Applications/VLC-dev.app/Contents/Frameworks/plugins/libmacosx_plugin.dylib)",
+      "Bash(cp -v modules/.libs/libmedialibrary_plugin.dylib VLC.app/Contents/Frameworks/plugins/libmedialibrary_plugin.dylib)",
+      "Bash(cp -v modules/.libs/libmedialibrary_plugin.dylib /Applications/VLC-dev.app/Contents/Frameworks/plugins/libmedialibrary_plugin.dylib)",
+      "Bash(codesign --force --sign - --timestamp=none /Applications/VLC-dev.app/Contents/Frameworks/plugins/libmacosx_plugin.dylib /Applications/VLC-dev.app/Contents/Frameworks/plugins/libmedialibrary_plugin.dylib VLC.app/Contents/Frameworks/plugins/libmacosx_plugin.dylib VLC.app/Contents/Frameworks/plugins/libmedialibrary_plugin.dylib)",
+      "Bash(ps -eo pid,etime,command)",
+      "Bash(codesign --force --sign - --timestamp=none /Applications/VLC-dev.app/Contents/Frameworks/plugins/libmacosx_plugin.dylib VLC.app/Contents/Frameworks/plugins/libmacosx_plugin.dylib)",
+      "Bash(ninja)",
+      "Bash(brew --prefix)",
+      "Bash(/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++ -Isrc/libmedialibrary.a.p -Isrc -I../src -I. -I.. -Iinclude -I../include -I../src/utils/xxhash -I\"/Volumes/DocumentsHDD/ドキュメント/Workspace/vlc/contrib/aarch64-apple-darwin25/include\" -fdiagnostics-color=always -D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST -Wall -Winvalid-pch -Wextra -Wpedantic -std=c++14 -O2 -g -DHAVE_CONFIG_H=1 -Werror=partial-availability -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.4.sdk -mmacosx-version-min=10.13 -arch arm64 -stdlib=libc++ -g -O2 -o src/libmedialibrary.a.p/database_SqliteConnection.cpp.o -c ../src/database/SqliteConnection.cpp)",
+      "Bash(ls src/libmedialibrary.a.p/*.o)",
+      "Bash(/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ar csr:*)",
+      "Bash(find modules:*)",
+      "Bash(nm modules/.libs/libmedialibrary_plugin.dylib)",
+      "Bash(codesign --force --sign - --timestamp=none /Applications/VLC-dev.app/Contents/Frameworks/plugins/libmedialibrary_plugin.dylib VLC.app/Contents/Frameworks/plugins/libmedialibrary_plugin.dylib)"
+    ]
+  }
+}

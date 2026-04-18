@@ -42,7 +42,7 @@ extern NSString * const VLCBookmarksTableViewTimeTableColumnIdentifier;
 
 - (instancetype)initWithTableView:(NSTableView *)tableView;
 
-- (void)addBookmark;
+- (BOOL)addBookmark:(NSError * _Nullable __autoreleasing * _Nullable)error;
 - (void)editBookmark:(VLCBookmark *)editedBookmark originalBookmark:(VLCBookmark *)originalBookmark;
 - (void)removeBookmarkWithTime:(const int64_t)bookmarkTime;
 - (void)removeBookmark:(VLCBookmark *)bookmark;

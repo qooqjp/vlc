@@ -187,7 +187,7 @@ static const struct vlc_thumbnailer_to_files_cbs bookmarkThumbnailCallbacks = {
 {
     [NSNotificationCenter.defaultCenter removeObserver:self];
 
-    if (_eventCallback != NULL) {
+    if (_eventCallback != NULL && _mediaLibrary != NULL) {
         vlc_ml_event_unregister_callback(_mediaLibrary, _eventCallback);
     }
 
@@ -226,9 +226,14 @@ static const struct vlc_thumbnailer_to_files_cbs bookmarkThumbnailCallbacks = {
                                                name:VLCPlayerCurrentMediaItemChanged
                                              object:nil];
 
-    _eventCallback = vlc_ml_event_register_callback(_mediaLibrary,
-                                                    bookmarksLibraryCallback,
-                                                    (__bridge void *)self);
+    if (_mediaLibrary != NULL) {
+        _eventCallback = vlc_ml_event_register_callback(_mediaLibrary,
+                                                        bookmarksLibraryCallback,
+                                                        (__bridge void *)self);
+    } else {
+        msg_Warn(getIntf(),
+                 "Bookmarks: media library unavailable; bookmarks will be disabled");
+    }
 }
 
 - (void)resetThumbnailState
@@ -721,25 +726,54 @@ static const struct vlc_thumbnailer_to_files_cbs bookmarkThumbnailCallbacks = {
     [tableView reloadData];
 }
 
-- (void)addBookmark
+- (BOOL)addBookmark:(NSError * _Nullable __autoreleasing * _Nullable)error
 {
+    if (_mediaLibrary == NULL) {
+        msg_Warn(getIntf(), "Bookmarks: media library unavailable");
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:@"VLCBookmarks"
+                                         code:1
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                _NS("The media library is not available in this instance, so bookmarks cannot be stored.")}];
+        }
+        return NO;
+    }
+
     const vlc_tick_t currentTime = _playerController.time;
     if (currentTime == VLC_TICK_INVALID || currentTime < VLC_TICK_0) {
         msg_Warn(getIntf(), "Unable to bookmark the current media because the playback time is not available yet");
-        return;
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:@"VLCBookmarks"
+                                         code:2
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                _NS("Playback has not started yet. Please wait until the media begins playing, then try again.")}];
+        }
+        return NO;
     }
 
     [self updateLibraryItemIdCreatingIfNeeded:YES];
 
     if (_libraryItemId <= 0) {
         msg_Warn(getIntf(), "Unable to bookmark the current media because no media library entry could be resolved");
-        return;
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:@"VLCBookmarks"
+                                         code:3
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                _NS("The currently playing media could not be registered in the library, so it cannot be bookmarked.")}];
+        }
+        return NO;
     }
 
     const int64_t bookmarkTime = MS_FROM_VLC_TICK(currentTime);
     if (vlc_ml_media_add_bookmark(_mediaLibrary, _libraryItemId, bookmarkTime) != VLC_SUCCESS) {
         msg_Warn(getIntf(), "Unable to bookmark media %lld at time %lld", _libraryItemId, bookmarkTime);
-        return;
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:@"VLCBookmarks"
+                                         code:4
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                _NS("Unable to save the bookmark. The media library database may be in use by another instance.")}];
+        }
+        return NO;
     }
 
     NSString * const currentMediaMRL = [self currentPlaybackMRL];
@@ -756,6 +790,7 @@ static const struct vlc_thumbnailer_to_files_cbs bookmarkThumbnailCallbacks = {
 
     [self trackBookmarkMediaMRL:currentMediaMRL];
     [self updateBookmarks];
+    return YES;
 }
 
 - (void)editBookmark:(VLCBookmark *)bookmark originalBookmark:(VLCBookmark *)originalBookmark

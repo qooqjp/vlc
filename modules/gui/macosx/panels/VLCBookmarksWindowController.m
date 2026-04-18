@@ -56,8 +56,7 @@
     VLCBookmarksTableViewDelegate *_tableViewDelegate;
 }
 
-- (BOOL)launchBookmarkInNewInstance:(VLCBookmark *)bookmark
-                              error:(NSError * __autoreleasing *)error;
+- (void)launchBookmarkInNewInstance:(VLCBookmark *)bookmark;
 - (void)presentBookmarkLaunchError:(nullable NSError *)error;
 @end
 
@@ -169,7 +168,16 @@
 
 - (IBAction)add:(id)sender
 {
-    [_tableViewDataSource addBookmark];
+    NSError *error = nil;
+    if ([_tableViewDataSource addBookmark:&error]) {
+        return;
+    }
+    NSAlert * const alert = [[NSAlert alloc] init];
+    alert.alertStyle = NSAlertStyleWarning;
+    alert.messageText = _NS("Unable to Add Bookmark");
+    alert.informativeText = error.localizedDescription
+        ?: _NS("The bookmark could not be added.");
+    [alert beginSheetModalForWindow:self.window completionHandler:nil];
 }
 
 - (IBAction)clear:(id)sender
@@ -197,10 +205,7 @@
         return;
     }
 
-    NSError *error = nil;
-    if (![self launchBookmarkInNewInstance:bookmark error:&error]) {
-        [self presentBookmarkLaunchError:error];
-    }
+    [self launchBookmarkInNewInstance:bookmark];
 }
 
 - (IBAction)remove:(id)sender
@@ -274,31 +279,53 @@
     _removeButton.enabled = enabled;
 }
 
-- (BOOL)launchBookmarkInNewInstance:(VLCBookmark *)bookmark
-                              error:(NSError * __autoreleasing *)error
+- (void)launchBookmarkInNewInstance:(VLCBookmark *)bookmark
 {
     NSURL * const bundleURL = NSBundle.mainBundle.bundleURL;
     if (bundleURL == nil) {
-        if (error != NULL) {
-            *error = [NSError errorWithDomain:NSCocoaErrorDomain
-                                         code:NSFileNoSuchFileError
-                                     userInfo:@{
-                                         NSLocalizedDescriptionKey: _NS("The VLC application bundle could not be located.")
-                                     }];
-        }
-        return NO;
+        NSError * const err = [NSError errorWithDomain:NSCocoaErrorDomain
+                                                  code:NSFileNoSuchFileError
+                                              userInfo:@{
+                                                  NSLocalizedDescriptionKey: _NS("The VLC application bundle could not be located.")
+                                              }];
+        [self presentBookmarkLaunchError:err];
+        return;
     }
 
     NSURL * const mediaURL = [NSURL URLWithString:bookmark.mediaMRL];
     if (mediaURL == nil) {
-        if (error != NULL) {
-            *error = [NSError errorWithDomain:NSCocoaErrorDomain
-                                         code:NSFileReadUnknownError
-                                     userInfo:@{
-                                         NSLocalizedDescriptionKey: _NS("The bookmark media location is invalid.")
-                                     }];
-        }
-        return NO;
+        NSError * const err = [NSError errorWithDomain:NSCocoaErrorDomain
+                                                  code:NSFileReadUnknownError
+                                              userInfo:@{
+                                                  NSLocalizedDescriptionKey: _NS("The bookmark media location is invalid.")
+                                              }];
+        [self presentBookmarkLaunchError:err];
+        return;
+    }
+
+    if (@available(macOS 10.15, *)) {
+        NSWorkspaceOpenConfiguration * const config = [NSWorkspaceOpenConfiguration configuration];
+        config.createsNewApplicationInstance = YES;
+        config.activates = YES;
+        config.promptsUserIfNeeded = NO;
+        config.arguments = @[
+            [NSString stringWithFormat:@"--start-time=%.3f", bookmark.bookmarkTime / 1000.0],
+        ];
+
+        [NSWorkspace.sharedWorkspace openURLs:@[mediaURL]
+                         withApplicationAtURL:bundleURL
+                                configuration:config
+                            completionHandler:^(NSRunningApplication * _Nullable app,
+                                                NSError * _Nullable error) {
+            (void)app;
+            if (error == nil) {
+                return;
+            }
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self presentBookmarkLaunchError:error];
+            });
+        }];
+        return;
     }
 
     NSString * const mediaLocation = mediaURL.isFileURL ? mediaURL.path : mediaURL.absoluteString;
@@ -309,11 +336,13 @@
         @"--args",
         [NSString stringWithFormat:@"--start-time=%.3f", bookmark.bookmarkTime / 1000.0],
         nil];
-
     NSTask * const task = [[NSTask alloc] init];
     task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/open"];
     task.arguments = arguments;
-    return [task launchAndReturnError:error];
+    NSError *taskError = nil;
+    if (![task launchAndReturnError:&taskError]) {
+        [self presentBookmarkLaunchError:taskError];
+    }
 }
 
 - (void)presentBookmarkLaunchError:(nullable NSError *)error
