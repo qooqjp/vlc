@@ -46,7 +46,7 @@ typedef struct
 
     /* Screensaver inhibition state (protected by lock) */
     vlc_inhibit_t *inhibit;
-    bool active;
+    unsigned inhibition_flags;
     bool fullscreen;
     vlc_mutex_t lock;
 } window_t;
@@ -85,7 +85,7 @@ vlc_window_t *vlc_window_New(vlc_object_t *obj, const char *module,
 
     w->inhibit = NULL;
     w->inhibit_windowed = dss == 1;
-    w->active = false;
+    w->inhibition_flags = VLC_INHIBIT_NONE;
     w->fullscreen = false;
     vlc_mutex_init(&w->lock);
 
@@ -163,7 +163,7 @@ void vlc_window_Delete(vlc_window_t *window)
     if (w->inhibit != NULL) {
         vlc_inhibit_t *inh = w->inhibit;
 
-        assert(!w->active);
+        assert(w->inhibition_flags == VLC_INHIBIT_NONE);
         vlc_mutex_lock(&w->lock);
         w->inhibit = NULL;
         vlc_mutex_unlock(&w->lock);
@@ -185,18 +185,26 @@ static void vlc_window_UpdateInhibitionUnlocked(vlc_window_t *window)
 
     vlc_mutex_assert(&w->lock);
 
-    if (w->active && (w->inhibit_windowed || w->fullscreen))
-        flags = VLC_INHIBIT_VIDEO;
+    if (w->inhibition_flags != VLC_INHIBIT_NONE &&
+        (w->inhibit_windowed || w->fullscreen))
+        flags = w->inhibition_flags;
     if (w->inhibit != NULL)
         vlc_inhibit_Set(w->inhibit, flags);
 }
 
 void vlc_window_SetInhibition(vlc_window_t *window, bool enabled)
 {
+    vlc_window_SetInhibitionLevel(window,
+                                  enabled ? VLC_INHIBIT_VIDEO
+                                          : VLC_INHIBIT_NONE);
+}
+
+void vlc_window_SetInhibitionLevel(vlc_window_t *window, unsigned flags)
+{
     window_t *w = container_of(window, window_t, wnd);
 
     vlc_mutex_lock(&w->lock);
-    w->active = enabled;
+    w->inhibition_flags = flags;
 
     vlc_window_UpdateInhibitionUnlocked(window);
     vlc_mutex_unlock(&w->lock);

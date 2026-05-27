@@ -149,6 +149,8 @@ const CGFloat VLCVolumeDefault = 1.;
 - (void)ABLoopStateChanged:(enum vlc_player_abloop)abLoopState;
 - (void)metaDataChangedForInput:(input_item_t *)inputItem;
 - (void)voutListUpdated;
+- (nullable NSString *)snapshotPathForCurrentMedia;
+- (nullable NSString *)snapshotDirectoryPathForCurrentMedia;
 
 /* video */
 - (void)fullscreenChanged:(BOOL)isFullscreen;
@@ -1847,7 +1849,53 @@ static int BossCallback(vlc_object_t *p_this,
 
 - (void)takeSnapshot
 {
-    vlc_player_vout_Snapshot(_p_player);
+    vout_thread_t *p_vout = [self videoOutputThreadForKeyWindow];
+    if (p_vout == NULL)
+        return;
+
+    NSString * const snapshotPath = [self snapshotPathForCurrentMedia];
+    var_Create(p_vout, "snapshot-path", VLC_VAR_STRING);
+    var_SetString(p_vout, "snapshot-path", snapshotPath.UTF8String);
+    var_TriggerCallback(p_vout, "video-snapshot");
+    vout_Release(p_vout);
+}
+
+- (nullable NSString *)snapshotPathForCurrentMedia
+{
+    char * const configuredSnapshotPath = config_GetPsz("snapshot-path");
+    if (configuredSnapshotPath != NULL && configuredSnapshotPath[0] != '\0') {
+        NSString * const snapshotPath = toNSStr(configuredSnapshotPath);
+        free(configuredSnapshotPath);
+        return snapshotPath;
+    }
+    free(configuredSnapshotPath);
+
+    return [self snapshotDirectoryPathForCurrentMedia];
+}
+
+- (nullable NSString *)snapshotDirectoryPathForCurrentMedia
+{
+    NSString * const mediaPath = self.currentMedia.path;
+    if (mediaPath.length == 0)
+        return nil;
+
+    NSFileManager * const fileManager = NSFileManager.defaultManager;
+    BOOL isDirectory = NO;
+    if (![fileManager fileExistsAtPath:mediaPath isDirectory:&isDirectory])
+        return nil;
+
+    if (isDirectory)
+        return mediaPath;
+
+    NSString * const directoryPath = mediaPath.stringByDeletingLastPathComponent;
+    if (directoryPath.length == 0)
+        return nil;
+
+    BOOL directoryExists = NO;
+    if ([fileManager fileExistsAtPath:directoryPath isDirectory:&directoryExists] && directoryExists)
+        return directoryPath;
+
+    return nil;
 }
 
 - (void)voutListUpdated

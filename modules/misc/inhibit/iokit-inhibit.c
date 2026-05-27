@@ -40,21 +40,32 @@ struct vlc_inhibit_sys
 
     // Inhibition IOPMAssertion to keep display or machine from sleeping
     IOPMAssertionID inh_assertion_id;
+
+    // Disk IOPMAssertion to keep media volumes responsive while playback is paused
+    IOPMAssertionID disk_assertion_id;
 };
+
+static void ReleaseAssertion(vlc_inhibit_t *ih, IOPMAssertionID *assertion_id,
+                             const char *description)
+{
+    if (*assertion_id == kIOPMNullAssertionID)
+        return;
+
+    msg_Dbg(ih, "Releasing previous IOPMAssertion (%s)", description);
+    if (IOPMAssertionRelease(*assertion_id) != kIOReturnSuccess)
+        msg_Warn(ih, "Failed releasing previous IOPMAssertion (%s)",
+                 description);
+    *assertion_id = kIOPMNullAssertionID;
+}
 
 static void UpdateInhibit(vlc_inhibit_t *ih, unsigned mask)
 {
     vlc_inhibit_sys_t* sys = ih->p_sys;
 
     // Release existing inhibition, if any
-    if (sys->inh_assertion_id != kIOPMNullAssertionID) {
-        msg_Dbg(ih, "Releasing previous IOPMAssertion");
-        if (IOPMAssertionRelease(sys->inh_assertion_id) != kIOReturnSuccess) {
-            msg_Err(ih, "Failed releasing previous IOPMAssertion, "
-                "not acquiring new one!");
-        }
-        sys->inh_assertion_id = kIOPMNullAssertionID;
-    }
+    ReleaseAssertion(ih, &sys->act_assertion_id, "display activity");
+    ReleaseAssertion(ih, &sys->inh_assertion_id, "sleep inhibition");
+    ReleaseAssertion(ih, &sys->disk_assertion_id, "disk idle inhibition");
 
     // Order is important here, if we prevent display sleep, it means
     // we automatically prevent idle sleep too.
@@ -105,6 +116,16 @@ static void UpdateInhibit(vlc_inhibit_t *ih, unsigned mask)
         msg_Err(ih, "Failed creating IOPMAssertion (%i)", ret);
         return;
     }
+
+    if ((mask & VLC_INHIBIT_SUSPEND) == VLC_INHIBIT_SUSPEND) {
+        CFStringRef disk_reason = CFSTR("VLC media playback");
+        ret = IOPMAssertionCreateWithName(kIOPMAssertPreventDiskIdle,
+                                          kIOPMAssertionLevelOn,
+                                          disk_reason,
+                                          &(sys->disk_assertion_id));
+        if (ret != kIOReturnSuccess)
+            msg_Warn(ih, "Failed creating disk idle IOPMAssertion (%i)", ret);
+    }
 }
 
 static int OpenInhibit(vlc_object_t *obj)
@@ -119,6 +140,7 @@ static int OpenInhibit(vlc_object_t *obj)
 
     sys->act_assertion_id = kIOPMNullAssertionID;
     sys->inh_assertion_id = kIOPMNullAssertionID;
+    sys->disk_assertion_id = kIOPMNullAssertionID;
 
     ih->inhibit = UpdateInhibit;
     return VLC_SUCCESS;
@@ -137,6 +159,16 @@ static void CloseInhibit(vlc_object_t *obj)
             msg_Warn(ih, "Failed releasing IOPMAssertion on termination");
         }
         sys->inh_assertion_id = kIOPMNullAssertionID;
+    }
+
+    // Release remaining IOPMAssertion for disk idle inhibition, if any
+    if (sys->disk_assertion_id != kIOPMNullAssertionID) {
+        msg_Dbg(ih, "Releasing remaining IOPMAssertion (disk idle)");
+
+        if (IOPMAssertionRelease(sys->disk_assertion_id) != kIOReturnSuccess) {
+            msg_Warn(ih, "Failed releasing disk idle IOPMAssertion on termination");
+        }
+        sys->disk_assertion_id = kIOPMNullAssertionID;
     }
 
     // Release remaining IOPMAssertion for activity, if any

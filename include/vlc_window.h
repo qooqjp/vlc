@@ -471,6 +471,14 @@ VLC_API void vlc_window_Delete(vlc_window_t *window);
 void vlc_window_SetInhibition(vlc_window_t *window, bool enabled);
 
 /**
+ * Sets a specific screensaver/sleep inhibition level.
+ *
+ * \param window window in respect to which inhibition should be updated
+ * \param flags inhibition flags, using enum vlc_inhibit_flags values
+ */
+void vlc_window_SetInhibitionLevel(vlc_window_t *window, unsigned flags);
+
+/**
  * Requests a new window state.
  *
  * This requests a change of the state of a window from the windowing system.

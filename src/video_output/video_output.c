@@ -45,6 +45,7 @@
 #include <vlc_vout.h>
 
 #include <vlc_filter.h>
+#include <vlc_inhibit.h>
 #include <vlc_spu.h>
 #include <vlc_vout_osd.h>
 #include <vlc_image.h>
@@ -1728,7 +1729,13 @@ void vout_ChangePause(vout_thread_t *vout, bool is_paused, vlc_tick_t date)
                               is_paused ? "paused" : "resumed");
 
     vlc_mutex_lock(&sys->window_lock);
+#ifdef __APPLE__
+    vlc_window_SetInhibitionLevel(sys->display_cfg.window,
+                                  is_paused ? VLC_INHIBIT_SUSPEND
+                                            : VLC_INHIBIT_VIDEO);
+#else
     vlc_window_SetInhibition(sys->display_cfg.window, !is_paused);
+#endif
     vlc_mutex_unlock(&sys->window_lock);
 }
 
