@@ -128,10 +128,13 @@
     NSParameterAssert(descriptorMrl != nil);
 
     NSUserDefaults * const defaults = NSUserDefaults.standardUserDefaults;
+    CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication);
     NSMutableArray<NSString *> * const bookmarkedLocations =
-        [defaults stringArrayForKey:VLCLibraryBookmarkedLocationsKey].mutableCopy;
+        [defaults stringArrayForKey:VLCLibraryBookmarkedLocationsKey].mutableCopy
+        ?: NSMutableArray.array;
     [bookmarkedLocations removeObject:descriptorMrl];
     [defaults setObject:bookmarkedLocations forKey:VLCLibraryBookmarkedLocationsKey];
+    CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication);
 
     NSNotificationCenter * const defaultCenter = NSNotificationCenter.defaultCenter;
     [defaultCenter postNotificationName:VLCLibraryBookmarkedLocationsChanged object:descriptor];

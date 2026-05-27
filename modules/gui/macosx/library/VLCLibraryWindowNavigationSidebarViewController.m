@@ -159,6 +159,7 @@ static NSString * const VLCLibrarySegmentCellIdentifier = @"VLCLibrarySegmentCel
 - (void)updateBookmarkObservation
 {
     NSUserDefaults * const defaults = NSUserDefaults.standardUserDefaults;
+    CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication);
     NSArray<NSString *> * const bookmarkedLocations =
         [defaults stringArrayForKey:VLCLibraryBookmarkedLocationsKey];
     if (bookmarkedLocations.count == 0) {
@@ -208,6 +209,7 @@ static NSString * const VLCLibrarySegmentCellIdentifier = @"VLCLibrarySegmentCel
                     NSString * const newLocationMrl = [parentLocationUrl URLByAppendingPathComponent:newFileName].absoluteString;
                     [mutableBookmarkedLocations replaceObjectAtIndex:locationIndex withObject:newLocationMrl];
                     [defaults setObject:mutableBookmarkedLocations forKey:VLCLibraryBookmarkedLocationsKey];
+                    CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication);
                 }
             }
             dispatch_async(dispatch_get_main_queue(), ^{

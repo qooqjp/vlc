@@ -164,11 +164,7 @@
 {
     if (([o_event type] == NSLeftMouseDown) && (! ([o_event modifierFlags] &  NSControlKeyMask))) {
         if (o_event.clickCount == 1) {
-            vlc_mutex_lock(&_mutex);
-            if (_wnd) {
-                vlc_window_ReportMousePressed(_wnd, MOUSE_BUTTON_LEFT);
-            }
-            vlc_mutex_unlock(&_mutex);
+            [NSNotificationCenter.defaultCenter postNotificationName:VLCVideoWindowShouldShowFullscreenController object:self];
         } else if (o_event.clickCount == 2) {
             [_playerController toggleFullscreen];
         }
@@ -183,14 +179,6 @@
 
 - (void)mouseUp:(NSEvent *)event
 {
-    if (event.type == NSLeftMouseUp) {
-        vlc_mutex_lock(&_mutex);
-        if (_wnd) {
-            vlc_window_ReportMouseReleased(_wnd, MOUSE_BUTTON_LEFT);
-        }
-        vlc_mutex_unlock(&_mutex);
-    }
-
     [super mouseUp:event];
 }
 

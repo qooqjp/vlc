@@ -58,6 +58,7 @@
 
 - (void)launchBookmarkInNewInstance:(VLCBookmark *)bookmark;
 - (void)presentBookmarkLaunchError:(nullable NSError *)error;
+- (void)presentAddBookmarkError:(nullable NSError *)error;
 @end
 
 @implementation VLCBookmarksWindowController
@@ -156,6 +157,7 @@
     if ([self.window isVisible])
         [self.window orderOut:sender];
     else {
+        [_tableViewDataSource updateBookmarks];
         [self.window setLevel: VLCMain.sharedInstance.voutProvider.currentStatusWindowLevel];
         [self.window makeKeyAndOrderFront:sender];
     }
@@ -172,12 +174,22 @@
     if ([_tableViewDataSource addBookmark:&error]) {
         return;
     }
-    NSAlert * const alert = [[NSAlert alloc] init];
-    alert.alertStyle = NSAlertStyleWarning;
-    alert.messageText = _NS("Unable to Add Bookmark");
-    alert.informativeText = error.localizedDescription
-        ?: _NS("The bookmark could not be added.");
-    [alert beginSheetModalForWindow:self.window completionHandler:nil];
+    [self presentAddBookmarkError:error];
+}
+
+- (IBAction)addBookmarkAndShowWindow:(id)sender
+{
+    NSWindow * const window = self.window;
+
+    NSError *error = nil;
+    const BOOL bookmarkAdded = [_tableViewDataSource addBookmark:&error];
+
+    [window setLevel: VLCMain.sharedInstance.voutProvider.currentStatusWindowLevel];
+    [window makeKeyAndOrderFront:sender];
+
+    if (!bookmarkAdded) {
+        [self presentAddBookmarkError:error];
+    }
 }
 
 - (IBAction)clear:(id)sender
@@ -303,31 +315,8 @@
         return;
     }
 
-    if (@available(macOS 10.15, *)) {
-        NSWorkspaceOpenConfiguration * const config = [NSWorkspaceOpenConfiguration configuration];
-        config.createsNewApplicationInstance = YES;
-        config.activates = YES;
-        config.promptsUserIfNeeded = NO;
-        config.arguments = @[
-            [NSString stringWithFormat:@"--start-time=%.3f", bookmark.bookmarkTime / 1000.0],
-        ];
-
-        [NSWorkspace.sharedWorkspace openURLs:@[mediaURL]
-                         withApplicationAtURL:bundleURL
-                                configuration:config
-                            completionHandler:^(NSRunningApplication * _Nullable app,
-                                                NSError * _Nullable error) {
-            (void)app;
-            if (error == nil) {
-                return;
-            }
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [self presentBookmarkLaunchError:error];
-            });
-        }];
-        return;
-    }
-
+    // Use the standard command-line startup path for secondary instances so
+    // media-library-backed features behave the same as a normal app launch.
     NSString * const mediaLocation = mediaURL.isFileURL ? mediaURL.path : mediaURL.absoluteString;
     NSMutableArray<NSString *> * const arguments = [NSMutableArray arrayWithObjects:
         @"-na",
@@ -352,6 +341,21 @@
     alert.messageText = _NS("Unable to Open Bookmark");
     alert.informativeText = error.localizedDescription ?: _NS("The selected bookmark could not be opened in a separate VLC window.");
     [alert runModal];
+}
+
+- (void)presentAddBookmarkError:(nullable NSError *)error
+{
+    NSAlert * const alert = [[NSAlert alloc] init];
+    alert.alertStyle = NSAlertStyleWarning;
+    alert.messageText = _NS("Unable to Add Bookmark");
+    alert.informativeText = error.localizedDescription
+        ?: _NS("The bookmark could not be added.");
+
+    if (self.window != nil) {
+        [alert beginSheetModalForWindow:self.window completionHandler:nil];
+    } else {
+        [alert runModal];
+    }
 }
 
 @end

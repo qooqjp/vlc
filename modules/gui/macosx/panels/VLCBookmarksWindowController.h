@@ -34,6 +34,7 @@
 @property (readwrite, weak) IBOutlet NSTableView *dataTable;
 
 - (IBAction)toggleWindow:(id)sender;
+- (IBAction)addBookmarkAndShowWindow:(id)sender;
 
 - (IBAction)add:(id)sender;
 - (IBAction)clear:(id)sender;

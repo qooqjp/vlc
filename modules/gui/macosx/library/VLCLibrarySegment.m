@@ -809,11 +809,13 @@ NSArray<NSString *> *defaultBookmarkedLocations()
         self.internalToolbarDisplayFlags = mediaSourceViewToolbarDisplayFlags;
 
         NSUserDefaults * const defaults = NSUserDefaults.standardUserDefaults;
+        CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication);
         NSArray<NSString *> *bookmarkedLocations =
             [defaults stringArrayForKey:VLCLibraryBookmarkedLocationsKey];
         if (bookmarkedLocations == nil) {
             bookmarkedLocations = defaultBookmarkedLocations();
             [defaults setObject:bookmarkedLocations forKey:VLCLibraryBookmarkedLocationsKey];
+            CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication);
         }
 
         const VLCLibrarySegmentType segmentType = VLCLibraryBrowseBookmarkedLocationSubSegmentType;
@@ -839,6 +841,7 @@ NSArray<NSString *> *defaultBookmarkedLocations()
 
         if (bookmarkedLocations.count != remainingBookmarkedLocations.count) {
             [defaults setObject:remainingBookmarkedLocations forKey:VLCLibraryBookmarkedLocationsKey];
+            CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication);
         }
     }
     return self;

@@ -55,7 +55,7 @@
 {
     [super awakeFromNib];
 
-    self.bookmarksButton.toolTip = _NS("Bookmarks");
+    self.bookmarksButton.toolTip = _NS("Create a new bookmark");
     self.bookmarksButton.accessibilityLabel = self.bookmarksButton.toolTip;
 
     self.subtitlesButton.toolTip = _NS("Subtitles");
@@ -228,7 +228,7 @@
 
 - (IBAction)openBookmarks:(id)sender
 {
-    [VLCMain.sharedInstance.bookmarks toggleWindow:sender];
+    [VLCMain.sharedInstance.bookmarks addBookmarkAndShowWindow:sender];
 }
 
 - (IBAction)openSubtitlesMenu:(id)sender

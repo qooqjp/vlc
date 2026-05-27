@@ -414,8 +414,10 @@
     VLCInputItem * const inputItem = self.representedInputItems.firstObject;
     NSString * const inputItemMRL = inputItem.MRL;
     NSUserDefaults * const defaults = NSUserDefaults.standardUserDefaults;
+    CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication);
     NSMutableArray<NSString *> * const bookmarkedLocations =
-        [defaults stringArrayForKey:VLCLibraryBookmarkedLocationsKey].mutableCopy;
+        [defaults stringArrayForKey:VLCLibraryBookmarkedLocationsKey].mutableCopy
+        ?: NSMutableArray.array;
     NSNotificationCenter * const defaultCenter = NSNotificationCenter.defaultCenter;
 
     if ([bookmarkedLocations containsObject:inputItemMRL]) {
@@ -424,6 +426,7 @@
         [bookmarkedLocations addObject:inputItemMRL];
     }
     [defaults setObject:bookmarkedLocations forKey:VLCLibraryBookmarkedLocationsKey];
+    CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication);
     [defaultCenter postNotificationName:VLCLibraryBookmarkedLocationsChanged object:inputItemMRL];
 }
 

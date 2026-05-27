@@ -32,6 +32,12 @@ NS_ASSUME_NONNULL_BEGIN
 + (instancetype)bookmarkWithVlcBookmark:(vlc_ml_bookmark_t)vlcBookmark
                              mediaTitle:(NSString *)mediaTitle
                                mediaMRL:(NSString *)mediaMRL;
++ (instancetype)bookmarkWithMediaLibraryItemId:(int64_t)mediaLibraryItemId
+                                    mediaTitle:(NSString *)mediaTitle
+                                      mediaMRL:(NSString *)mediaMRL
+                                  bookmarkTime:(int64_t)bookmarkTime
+                                  bookmarkName:(NSString *)bookmarkName
+                           bookmarkDescription:(NSString *)bookmarkDescription;
 
 @property (readonly) int64_t mediaLibraryItemId;
 @property (readonly, copy) NSString *mediaTitle;

@@ -284,8 +284,8 @@ NSString * const VLCUseClassicVideoPlayerLayoutKey = @"VLCUseClassicVideoPlayerL
         [self applyAudioDecorativeViewForegroundCoverArtViewConstraints];
     } else {
         [self setAutohideControls:YES];
-        self.bottomButtonStackViewConstraint.active = NO;
-        self.centerButtonStackInViewConstraint.active = YES;
+        self.centerButtonStackInViewConstraint.active = NO;
+        self.bottomButtonStackViewConstraint.active = YES;
         self.prevButtonSizeConstraint.constant = VLCLibraryUIUnits.mediumPlaybackControlButtonSize;
         self.playButtonSizeConstraint.constant = VLCLibraryUIUnits.largePlaybackControlButtonSize;
         self.nextButtonSizeConstraint.constant = VLCLibraryUIUnits.mediumPlaybackControlButtonSize;
@@ -431,7 +431,11 @@ NSString * const VLCUseClassicVideoPlayerLayoutKey = @"VLCUseClassicVideoPlayerL
         [context setDuration:VLCLibraryUIUnits.controlsFadeAnimationDuration];
         [self->_mainControlsView.animator setAlphaValue:0.0f];
         [self->_floatOnTopIndicatorImageView.animator setAlphaValue:0.0f];
-    } completionHandler:nil];
+    } completionHandler:^{
+        if (self->_mainControlsView.alphaValue <= 0.01f) {
+            self->_mainControlsView.hidden = YES;
+        }
+    }];
 }
 
 - (void)setAutohideControls:(BOOL)autohide
@@ -468,6 +472,8 @@ NSString * const VLCUseClassicVideoPlayerLayoutKey = @"VLCUseClassicVideoPlayerL
         self.videoViewBottomToViewConstraint.active = NO;
         self.videoViewBottomConstraint.active = YES;
     }
+
+    _mainControlsView.hidden = NO;
 
     if (!_autohideControls) {
         _mainControlsView.alphaValue = 1.0f;        

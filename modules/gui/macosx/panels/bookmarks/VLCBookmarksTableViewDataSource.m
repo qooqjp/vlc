@@ -54,6 +54,16 @@ static const NSUInteger kVLCBookmarkThumbnailWidth = 240;
 static const NSUInteger kVLCBookmarkThumbnailHeight = 135;
 static NSString * const VLCBookmarkThumbnailCacheDirectoryName = @"BookmarkThumbnails";
 static NSString * const VLCBookmarkTrackedMediaMRLsDefaultsKey = @"VLCBookmarkTrackedMediaMRLs";
+static NSString * const VLCBookmarkStoredBookmarksDefaultsKey = @"VLCStoredBookmarks";
+static NSString * const VLCBookmarkStoredMediaIdKey = @"mediaLibraryItemId";
+static NSString * const VLCBookmarkStoredMediaTitleKey = @"mediaTitle";
+static NSString * const VLCBookmarkStoredMediaMRLKey = @"mediaMRL";
+static NSString * const VLCBookmarkStoredTimeKey = @"bookmarkTime";
+static NSString * const VLCBookmarkStoredNameKey = @"bookmarkName";
+static NSString * const VLCBookmarkStoredDescriptionKey = @"bookmarkDescription";
+static NSString * const VLCBookmarksStoreDidChangeDistributedNotification =
+    @"org.videolan.vlc.bookmarks.storeDidChange";
+static NSString * const VLCBookmarksStoreDidChangeProcessIdentifierKey = @"pid";
 
 static void bookmarksLibraryCallback(void *p_data, const vlc_ml_event_t *p_event)
 {
@@ -147,10 +157,23 @@ static const struct vlc_thumbnailer_to_files_cbs bookmarkThumbnailCallbacks = {
 - (nullable VLCMediaLibraryMediaItem *)mediaItemForLibraryItemId:(int64_t)libraryItemId;
 - (NSString *)displayTitleForMediaItem:(nullable VLCMediaLibraryMediaItem *)mediaItem
                            fallbackMRL:(NSString *)mediaMRL;
+- (NSString *)displayTitleForMRL:(NSString *)mediaMRL
+                 currentInputItem:(nullable VLCInputItem *)currentInputItem;
 - (NSArray<NSString *> *)trackedBookmarkMediaMRLs;
 - (void)setTrackedBookmarkMediaMRLs:(NSArray<NSString *> *)mediaMRLs;
 - (void)trackBookmarkMediaMRL:(nullable NSString *)mediaMRL;
 - (void)pruneTrackedBookmarkMediaMRL:(nullable NSString *)mediaMRL mediaId:(int64_t)mediaId;
+- (NSArray<NSDictionary<NSString *, id> *> *)storedBookmarkRecords;
+- (void)setStoredBookmarkRecords:(NSArray<NSDictionary<NSString *, id> *> *)bookmarkRecords;
+- (nullable VLCBookmark *)bookmarkForStoredBookmarkRecord:(NSDictionary<NSString *, id> *)bookmarkRecord;
+- (NSDictionary<NSString *, id> *)storedBookmarkRecordForBookmark:(VLCBookmark *)bookmark;
+- (NSString *)storeKeyForMediaMRL:(NSString *)mediaMRL bookmarkTime:(int64_t)bookmarkTime;
+- (NSString *)storeKeyForBookmark:(VLCBookmark *)bookmark;
+- (void)storeBookmark:(VLCBookmark *)bookmark replacingBookmark:(nullable VLCBookmark *)originalBookmark;
+- (void)removeStoredBookmark:(VLCBookmark *)bookmark;
+- (void)mergeBookmarksIntoStoredBookmarks:(NSArray<VLCBookmark *> *)bookmarks;
+- (void)bookmarkStoreDidChange:(NSNotification *)notification;
+- (void)postDistributedBookmarkStoreDidChangeNotification;
 - (void)updateLibraryItemIdCreatingIfNeeded:(BOOL)createIfNeeded;
 - (NSString *)thumbnailCacheKeyForBookmark:(VLCBookmark *)bookmark;
 - (NSString *)thumbnailCacheDirectoryPath;
@@ -186,6 +209,7 @@ static const struct vlc_thumbnailer_to_files_cbs bookmarkThumbnailCallbacks = {
 - (void)dealloc
 {
     [NSNotificationCenter.defaultCenter removeObserver:self];
+    [NSDistributedNotificationCenter.defaultCenter removeObserver:self];
 
     if (_eventCallback != NULL && _mediaLibrary != NULL) {
         vlc_ml_event_unregister_callback(_mediaLibrary, _eventCallback);
@@ -225,6 +249,11 @@ static const struct vlc_thumbnailer_to_files_cbs bookmarkThumbnailCallbacks = {
                                            selector:@selector(currentMediaItemChanged:)
                                                name:VLCPlayerCurrentMediaItemChanged
                                              object:nil];
+    [NSDistributedNotificationCenter.defaultCenter addObserver:self
+                                                      selector:@selector(bookmarkStoreDidChange:)
+                                                          name:VLCBookmarksStoreDidChangeDistributedNotification
+                                                        object:nil
+                                            suspensionBehavior:NSNotificationSuspensionBehaviorDeliverImmediately];
 
     if (_mediaLibrary != NULL) {
         _eventCallback = vlc_ml_event_register_callback(_mediaLibrary,
@@ -232,7 +261,7 @@ static const struct vlc_thumbnailer_to_files_cbs bookmarkThumbnailCallbacks = {
                                                         (__bridge void *)self);
     } else {
         msg_Warn(getIntf(),
-                 "Bookmarks: media library unavailable; bookmarks will be disabled");
+                 "Bookmarks: media library unavailable; using local bookmark store");
     }
 }
 
@@ -248,8 +277,11 @@ static const struct vlc_thumbnailer_to_files_cbs bookmarkThumbnailCallbacks = {
 
 - (NSString *)thumbnailCacheKeyForBookmark:(VLCBookmark *)bookmark
 {
-    return [NSString stringWithFormat:@"%lld-%lld",
-            bookmark.mediaLibraryItemId,
+    NSString * const mediaIdentifier = bookmark.mediaLibraryItemId > 0 ?
+        [NSString stringWithFormat:@"%lld", bookmark.mediaLibraryItemId] :
+        [NSString stringWithFormat:@"%lu", (unsigned long)bookmark.mediaMRL.hash];
+    return [NSString stringWithFormat:@"%@-%lld",
+            mediaIdentifier,
             bookmark.bookmarkTime];
 }
 
@@ -483,8 +515,21 @@ static const struct vlc_thumbnailer_to_files_cbs bookmarkThumbnailCallbacks = {
     return mediaMRL;
 }
 
+- (NSString *)displayTitleForMRL:(NSString *)mediaMRL
+                 currentInputItem:(nullable VLCInputItem *)currentInputItem
+{
+    if (currentInputItem.MRL.length > 0 &&
+        [currentInputItem.MRL isEqualToString:mediaMRL] &&
+        currentInputItem.name.length > 0) {
+        return currentInputItem.name;
+    }
+
+    return [self displayTitleForMediaItem:nil fallbackMRL:mediaMRL];
+}
+
 - (NSArray<NSString *> *)trackedBookmarkMediaMRLs
 {
+    CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication);
     NSArray<NSString *> * const trackedMRLs =
         [NSUserDefaults.standardUserDefaults stringArrayForKey:VLCBookmarkTrackedMediaMRLsDefaultsKey];
     return trackedMRLs ?: @[];
@@ -495,10 +540,12 @@ static const struct vlc_thumbnailer_to_files_cbs bookmarkThumbnailCallbacks = {
     NSUserDefaults * const defaults = NSUserDefaults.standardUserDefaults;
     if (mediaMRLs.count == 0) {
         [defaults removeObjectForKey:VLCBookmarkTrackedMediaMRLsDefaultsKey];
+        CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication);
         return;
     }
 
     [defaults setObject:mediaMRLs forKey:VLCBookmarkTrackedMediaMRLsDefaultsKey];
+    CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication);
 }
 
 - (void)trackBookmarkMediaMRL:(nullable NSString *)mediaMRL
@@ -516,7 +563,7 @@ static const struct vlc_thumbnailer_to_files_cbs bookmarkThumbnailCallbacks = {
 
 - (void)pruneTrackedBookmarkMediaMRL:(nullable NSString *)mediaMRL mediaId:(int64_t)mediaId
 {
-    if (mediaMRL.length == 0 || mediaId <= 0) {
+    if (_mediaLibrary == NULL || mediaMRL.length == 0 || mediaId <= 0) {
         return;
     }
 
@@ -535,6 +582,225 @@ static const struct vlc_thumbnailer_to_files_cbs bookmarkThumbnailCallbacks = {
     NSMutableArray<NSString *> * const trackedMRLs = self.trackedBookmarkMediaMRLs.mutableCopy;
     [trackedMRLs removeObject:mediaMRL];
     [self setTrackedBookmarkMediaMRLs:trackedMRLs];
+}
+
+- (NSArray<NSDictionary<NSString *, id> *> *)storedBookmarkRecords
+{
+    CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication);
+    NSArray * const bookmarkRecords =
+        [NSUserDefaults.standardUserDefaults arrayForKey:VLCBookmarkStoredBookmarksDefaultsKey];
+    if (![bookmarkRecords isKindOfClass:NSArray.class]) {
+        return @[];
+    }
+
+    NSMutableArray<NSDictionary<NSString *, id> *> * const validBookmarkRecords = NSMutableArray.array;
+    for (id bookmarkRecord in bookmarkRecords) {
+        if (![bookmarkRecord isKindOfClass:NSDictionary.class]) {
+            continue;
+        }
+
+        NSDictionary * const bookmarkRecordDictionary = bookmarkRecord;
+        NSString * const mediaMRL = bookmarkRecordDictionary[VLCBookmarkStoredMediaMRLKey];
+        NSNumber * const bookmarkTime = bookmarkRecordDictionary[VLCBookmarkStoredTimeKey];
+        if (![mediaMRL isKindOfClass:NSString.class] ||
+            mediaMRL.length == 0 ||
+            ![bookmarkTime isKindOfClass:NSNumber.class]) {
+            continue;
+        }
+
+        [validBookmarkRecords addObject:bookmarkRecordDictionary];
+    }
+
+    return validBookmarkRecords;
+}
+
+- (void)setStoredBookmarkRecords:(NSArray<NSDictionary<NSString *, id> *> *)bookmarkRecords
+{
+    NSUserDefaults * const defaults = NSUserDefaults.standardUserDefaults;
+    if (bookmarkRecords.count == 0) {
+        [defaults removeObjectForKey:VLCBookmarkStoredBookmarksDefaultsKey];
+    } else {
+        [defaults setObject:bookmarkRecords forKey:VLCBookmarkStoredBookmarksDefaultsKey];
+    }
+    CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication);
+}
+
+- (nullable VLCBookmark *)bookmarkForStoredBookmarkRecord:(NSDictionary<NSString *, id> *)bookmarkRecord
+{
+    NSString * const mediaMRL = bookmarkRecord[VLCBookmarkStoredMediaMRLKey];
+    NSNumber * const bookmarkTime = bookmarkRecord[VLCBookmarkStoredTimeKey];
+    if (![mediaMRL isKindOfClass:NSString.class] ||
+        mediaMRL.length == 0 ||
+        ![bookmarkTime isKindOfClass:NSNumber.class]) {
+        return nil;
+    }
+
+    NSNumber * const mediaLibraryItemId = bookmarkRecord[VLCBookmarkStoredMediaIdKey];
+    NSString * const mediaTitle = bookmarkRecord[VLCBookmarkStoredMediaTitleKey];
+    NSString * const bookmarkName = bookmarkRecord[VLCBookmarkStoredNameKey];
+    NSString * const bookmarkDescription = bookmarkRecord[VLCBookmarkStoredDescriptionKey];
+
+    return [VLCBookmark bookmarkWithMediaLibraryItemId:
+                [mediaLibraryItemId isKindOfClass:NSNumber.class] ? mediaLibraryItemId.longLongValue : -1
+                                            mediaTitle:[mediaTitle isKindOfClass:NSString.class] ? mediaTitle : @""
+                                              mediaMRL:mediaMRL
+                                          bookmarkTime:bookmarkTime.longLongValue
+                                          bookmarkName:[bookmarkName isKindOfClass:NSString.class] ? bookmarkName : @""
+                                   bookmarkDescription:[bookmarkDescription isKindOfClass:NSString.class] ? bookmarkDescription : @""];
+}
+
+- (NSDictionary<NSString *, id> *)storedBookmarkRecordForBookmark:(VLCBookmark *)bookmark
+{
+    NSMutableDictionary<NSString *, id> * const bookmarkRecord = NSMutableDictionary.dictionary;
+    bookmarkRecord[VLCBookmarkStoredMediaIdKey] = @(bookmark.mediaLibraryItemId);
+    bookmarkRecord[VLCBookmarkStoredMediaMRLKey] = bookmark.mediaMRL ?: @"";
+    bookmarkRecord[VLCBookmarkStoredMediaTitleKey] = bookmark.mediaTitle ?: @"";
+    bookmarkRecord[VLCBookmarkStoredTimeKey] = @(bookmark.bookmarkTime);
+    bookmarkRecord[VLCBookmarkStoredNameKey] = bookmark.bookmarkName ?: @"";
+    bookmarkRecord[VLCBookmarkStoredDescriptionKey] = bookmark.bookmarkDescription ?: @"";
+    return bookmarkRecord;
+}
+
+- (NSString *)storeKeyForMediaMRL:(NSString *)mediaMRL bookmarkTime:(int64_t)bookmarkTime
+{
+    return [NSString stringWithFormat:@"%@\n%lld", mediaMRL ?: @"", bookmarkTime];
+}
+
+- (NSString *)storeKeyForBookmark:(VLCBookmark *)bookmark
+{
+    return [self storeKeyForMediaMRL:bookmark.mediaMRL bookmarkTime:bookmark.bookmarkTime];
+}
+
+- (void)storeBookmark:(VLCBookmark *)bookmark replacingBookmark:(nullable VLCBookmark *)originalBookmark
+{
+    if (bookmark.mediaMRL.length == 0) {
+        return;
+    }
+
+    NSMutableArray<NSDictionary<NSString *, id> *> * const bookmarkRecords =
+        self.storedBookmarkRecords.mutableCopy;
+    NSString * const bookmarkKey = [self storeKeyForBookmark:bookmark];
+    NSString * const originalBookmarkKey = originalBookmark != nil ?
+        [self storeKeyForBookmark:originalBookmark] :
+        bookmarkKey;
+
+    NSIndexSet * const matchingIndexes =
+        [bookmarkRecords indexesOfObjectsPassingTest:^BOOL(NSDictionary<NSString *,id> * const storedBookmarkRecord,
+                                                           NSUInteger idx,
+                                                           BOOL * const stop) {
+            VLC_UNUSED(idx);
+            VLC_UNUSED(stop);
+
+            VLCBookmark * const storedBookmark =
+                [self bookmarkForStoredBookmarkRecord:storedBookmarkRecord];
+            if (storedBookmark == nil) {
+                return NO;
+            }
+
+            NSString * const storedBookmarkKey = [self storeKeyForBookmark:storedBookmark];
+            return [storedBookmarkKey isEqualToString:bookmarkKey] ||
+                   [storedBookmarkKey isEqualToString:originalBookmarkKey];
+        }];
+    [bookmarkRecords removeObjectsAtIndexes:matchingIndexes];
+    [bookmarkRecords addObject:[self storedBookmarkRecordForBookmark:bookmark]];
+    [self setStoredBookmarkRecords:bookmarkRecords];
+}
+
+- (void)removeStoredBookmark:(VLCBookmark *)bookmark
+{
+    if (bookmark.mediaMRL.length == 0) {
+        return;
+    }
+
+    NSMutableArray<NSDictionary<NSString *, id> *> * const bookmarkRecords =
+        self.storedBookmarkRecords.mutableCopy;
+    NSString * const bookmarkKey = [self storeKeyForBookmark:bookmark];
+    NSIndexSet * const matchingIndexes =
+        [bookmarkRecords indexesOfObjectsPassingTest:^BOOL(NSDictionary<NSString *,id> * const storedBookmarkRecord,
+                                                           NSUInteger idx,
+                                                           BOOL * const stop) {
+            VLC_UNUSED(idx);
+            VLC_UNUSED(stop);
+
+            VLCBookmark * const storedBookmark =
+                [self bookmarkForStoredBookmarkRecord:storedBookmarkRecord];
+            return storedBookmark != nil &&
+                   [[self storeKeyForBookmark:storedBookmark] isEqualToString:bookmarkKey];
+        }];
+    [bookmarkRecords removeObjectsAtIndexes:matchingIndexes];
+    [self setStoredBookmarkRecords:bookmarkRecords];
+}
+
+- (void)mergeBookmarksIntoStoredBookmarks:(NSArray<VLCBookmark *> *)bookmarks
+{
+    if (bookmarks.count == 0) {
+        return;
+    }
+
+    NSMutableDictionary<NSString *, NSDictionary<NSString *, id> *> * const storedRecordsByKey =
+        NSMutableDictionary.dictionary;
+    NSMutableArray<NSString *> * const orderedKeys = NSMutableArray.array;
+
+    for (NSDictionary<NSString *, id> * const storedBookmarkRecord in self.storedBookmarkRecords) {
+        VLCBookmark * const storedBookmark =
+            [self bookmarkForStoredBookmarkRecord:storedBookmarkRecord];
+        if (storedBookmark == nil) {
+            continue;
+        }
+
+        NSString * const storedBookmarkKey = [self storeKeyForBookmark:storedBookmark];
+        if (storedRecordsByKey[storedBookmarkKey] == nil) {
+            [orderedKeys addObject:storedBookmarkKey];
+        }
+        storedRecordsByKey[storedBookmarkKey] = storedBookmarkRecord;
+    }
+
+    for (VLCBookmark * const bookmark in bookmarks) {
+        if (bookmark.mediaMRL.length == 0) {
+            continue;
+        }
+
+        NSString * const bookmarkKey = [self storeKeyForBookmark:bookmark];
+        if (storedRecordsByKey[bookmarkKey] == nil) {
+            [orderedKeys addObject:bookmarkKey];
+        }
+        storedRecordsByKey[bookmarkKey] = [self storedBookmarkRecordForBookmark:bookmark];
+    }
+
+    NSMutableArray<NSDictionary<NSString *, id> *> * const mergedBookmarkRecords = NSMutableArray.array;
+    for (NSString * const bookmarkKey in orderedKeys) {
+        NSDictionary<NSString *, id> * const bookmarkRecord = storedRecordsByKey[bookmarkKey];
+        if (bookmarkRecord != nil) {
+            [mergedBookmarkRecords addObject:bookmarkRecord];
+        }
+    }
+
+    [self setStoredBookmarkRecords:mergedBookmarkRecords];
+}
+
+- (void)bookmarkStoreDidChange:(NSNotification *)notification
+{
+    NSNumber * const sourceProcessId =
+        notification.userInfo[VLCBookmarksStoreDidChangeProcessIdentifierKey];
+    if (sourceProcessId != nil &&
+        sourceProcessId.intValue == NSProcessInfo.processInfo.processIdentifier) {
+        return;
+    }
+
+    [self updateBookmarks];
+}
+
+- (void)postDistributedBookmarkStoreDidChangeNotification
+{
+    NSDictionary<NSString *, NSNumber *> * const userInfo = @{
+        VLCBookmarksStoreDidChangeProcessIdentifierKey:
+            @(NSProcessInfo.processInfo.processIdentifier)
+    };
+    [NSDistributedNotificationCenter.defaultCenter
+        postNotificationName:VLCBookmarksStoreDidChangeDistributedNotification
+                      object:nil
+                    userInfo:userInfo
+          deliverImmediately:YES];
 }
 
 - (void)updateLibraryItemIdCreatingIfNeeded:(BOOL)createIfNeeded
@@ -577,10 +843,20 @@ static const struct vlc_thumbnailer_to_files_cbs bookmarkThumbnailCallbacks = {
 
 - (void)updateBookmarks
 {
-    if (_mediaLibrary == NULL) {
-        _bookmarks = [NSArray array];
-        [_tableView reloadData];
-        return;
+    NSMutableDictionary<NSString *, VLCBookmark *> * const bookmarksByKey = NSMutableDictionary.dictionary;
+    NSMutableArray<NSString *> * const orderedKeys = NSMutableArray.array;
+
+    for (NSDictionary<NSString *, id> * const bookmarkRecord in self.storedBookmarkRecords) {
+        VLCBookmark * const bookmark = [self bookmarkForStoredBookmarkRecord:bookmarkRecord];
+        if (bookmark == nil) {
+            continue;
+        }
+
+        NSString * const bookmarkKey = [self storeKeyForBookmark:bookmark];
+        if (bookmarksByKey[bookmarkKey] == nil) {
+            [orderedKeys addObject:bookmarkKey];
+        }
+        bookmarksByKey[bookmarkKey] = bookmark;
     }
 
     NSMutableArray<NSString *> * const trackedMRLs = self.trackedBookmarkMediaMRLs.mutableCopy;
@@ -589,48 +865,60 @@ static const struct vlc_thumbnailer_to_files_cbs bookmarkThumbnailCallbacks = {
         [trackedMRLs addObject:currentMediaMRL];
     }
 
-    NSMutableArray<NSString *> * const validTrackedMRLs = [NSMutableArray array];
-    NSMutableArray<VLCBookmark *> * const tempBookmarks = NSMutableArray.array;
+    NSMutableArray<VLCBookmark *> * const libraryBackedBookmarks = NSMutableArray.array;
 
-    for (NSString * const mediaMRL in trackedMRLs) {
-        const BOOL isCurrentMedia =
-            currentMediaMRL.length > 0 && [currentMediaMRL isEqualToString:mediaMRL];
-        const int64_t mediaId = isCurrentMedia ?
-            _libraryItemId :
-            [self mediaIdForMRL:mediaMRL isStream:NO createIfNeeded:NO];
-        if (mediaId <= 0) {
-            continue;
-        }
+    if (_mediaLibrary != NULL) {
+        for (NSString * const mediaMRL in trackedMRLs) {
+            const BOOL isCurrentMedia =
+                currentMediaMRL.length > 0 && [currentMediaMRL isEqualToString:mediaMRL];
+            const int64_t mediaId = isCurrentMedia ?
+                _libraryItemId :
+                [self mediaIdForMRL:mediaMRL isStream:NO createIfNeeded:NO];
+            if (mediaId <= 0) {
+                continue;
+            }
 
-        vlc_ml_bookmark_list_t * const vlcBookmarks =
-            vlc_ml_list_media_bookmarks(_mediaLibrary, nil, mediaId);
-        if (vlcBookmarks == NULL) {
-            continue;
-        }
-        if (vlcBookmarks->i_nb_items == 0) {
+            vlc_ml_bookmark_list_t * const vlcBookmarks =
+                vlc_ml_list_media_bookmarks(_mediaLibrary, nil, mediaId);
+            if (vlcBookmarks == NULL) {
+                continue;
+            }
+            if (vlcBookmarks->i_nb_items == 0) {
+                vlc_ml_bookmark_list_release(vlcBookmarks);
+                continue;
+            }
+
+            VLCMediaLibraryMediaItem * const mediaItem = [self mediaItemForLibraryItemId:mediaId];
+            NSString * const mediaTitle =
+                [self displayTitleForMediaItem:mediaItem fallbackMRL:mediaMRL];
+
+            for (size_t i = 0; i < vlcBookmarks->i_nb_items; i++) {
+                vlc_ml_bookmark_t vlcBookmark = vlcBookmarks->p_items[i];
+                VLCBookmark * const bookmark =
+                    [VLCBookmark bookmarkWithVlcBookmark:vlcBookmark
+                                              mediaTitle:mediaTitle
+                                                mediaMRL:mediaMRL];
+                NSString * const bookmarkKey = [self storeKeyForBookmark:bookmark];
+                if (bookmarksByKey[bookmarkKey] == nil) {
+                    [orderedKeys addObject:bookmarkKey];
+                }
+                bookmarksByKey[bookmarkKey] = bookmark;
+                [libraryBackedBookmarks addObject:bookmark];
+            }
+
             vlc_ml_bookmark_list_release(vlcBookmarks);
-            continue;
         }
 
-        [validTrackedMRLs addObject:mediaMRL];
-
-        VLCMediaLibraryMediaItem * const mediaItem = [self mediaItemForLibraryItemId:mediaId];
-        NSString * const mediaTitle =
-            [self displayTitleForMediaItem:mediaItem fallbackMRL:mediaMRL];
-
-        for (size_t i = 0; i < vlcBookmarks->i_nb_items; i++) {
-            vlc_ml_bookmark_t vlcBookmark = vlcBookmarks->p_items[i];
-            VLCBookmark * const bookmark =
-                [VLCBookmark bookmarkWithVlcBookmark:vlcBookmark
-                                          mediaTitle:mediaTitle
-                                            mediaMRL:mediaMRL];
-            [tempBookmarks addObject:bookmark];
-        }
-
-        vlc_ml_bookmark_list_release(vlcBookmarks);
+        [self mergeBookmarksIntoStoredBookmarks:libraryBackedBookmarks];
     }
 
-    [self setTrackedBookmarkMediaMRLs:validTrackedMRLs];
+    NSMutableArray<VLCBookmark *> * const tempBookmarks = NSMutableArray.array;
+    for (NSString * const bookmarkKey in orderedKeys) {
+        VLCBookmark * const bookmark = bookmarksByKey[bookmarkKey];
+        if (bookmark != nil) {
+            [tempBookmarks addObject:bookmark];
+        }
+    }
     _bookmarks = [tempBookmarks copy];
 
     [_tableView reloadData];
@@ -728,124 +1016,128 @@ static const struct vlc_thumbnailer_to_files_cbs bookmarkThumbnailCallbacks = {
 
 - (BOOL)addBookmark:(NSError * _Nullable __autoreleasing * _Nullable)error
 {
-    if (_mediaLibrary == NULL) {
-        msg_Warn(getIntf(), "Bookmarks: media library unavailable");
-        if (error != NULL) {
-            *error = [NSError errorWithDomain:@"VLCBookmarks"
-                                         code:1
-                                     userInfo:@{NSLocalizedDescriptionKey:
-                                                _NS("The media library is not available in this instance, so bookmarks cannot be stored.")}];
-        }
-        return NO;
-    }
-
     const vlc_tick_t currentTime = _playerController.time;
     if (currentTime == VLC_TICK_INVALID || currentTime < VLC_TICK_0) {
         msg_Warn(getIntf(), "Unable to bookmark the current media because the playback time is not available yet");
         if (error != NULL) {
             *error = [NSError errorWithDomain:@"VLCBookmarks"
-                                         code:2
+                                         code:1
                                      userInfo:@{NSLocalizedDescriptionKey:
                                                 _NS("Playback has not started yet. Please wait until the media begins playing, then try again.")}];
         }
         return NO;
     }
 
-    [self updateLibraryItemIdCreatingIfNeeded:YES];
-
-    if (_libraryItemId <= 0) {
-        msg_Warn(getIntf(), "Unable to bookmark the current media because no media library entry could be resolved");
+    NSString * const currentMediaMRL = [self currentPlaybackMRL];
+    VLCInputItem * const currentInputItem = _playerController.currentMedia;
+    if (currentMediaMRL.length == 0 || currentInputItem == nil) {
+        msg_Warn(getIntf(), "Unable to bookmark the current media because no media location is available");
         if (error != NULL) {
             *error = [NSError errorWithDomain:@"VLCBookmarks"
-                                         code:3
+                                         code:2
                                      userInfo:@{NSLocalizedDescriptionKey:
-                                                _NS("The currently playing media could not be registered in the library, so it cannot be bookmarked.")}];
+                                                _NS("The currently playing media does not have a location that can be bookmarked.")}];
         }
         return NO;
     }
 
     const int64_t bookmarkTime = MS_FROM_VLC_TICK(currentTime);
-    if (vlc_ml_media_add_bookmark(_mediaLibrary, _libraryItemId, bookmarkTime) != VLC_SUCCESS) {
-        msg_Warn(getIntf(), "Unable to bookmark media %lld at time %lld", _libraryItemId, bookmarkTime);
-        if (error != NULL) {
-            *error = [NSError errorWithDomain:@"VLCBookmarks"
-                                         code:4
-                                     userInfo:@{NSLocalizedDescriptionKey:
-                                                _NS("Unable to save the bookmark. The media library database may be in use by another instance.")}];
-        }
-        return NO;
-    }
-
-    NSString * const currentMediaMRL = [self currentPlaybackMRL];
     NSString * const bookmarkDisplayTime = [NSString stringWithTime:bookmarkTime / 1000];
     NSString * const bookmarkName =
         [NSString stringWithFormat:_NS("Bookmark at %@"), bookmarkDisplayTime];
-    if (vlc_ml_media_update_bookmark(_mediaLibrary,
-                                     _libraryItemId,
-                                     bookmarkTime,
-                                     bookmarkName.UTF8String,
-                                     NULL) != VLC_SUCCESS) {
-        msg_Warn(getIntf(), "Unable to set metadata for bookmark %lld on media %lld", bookmarkTime, _libraryItemId);
+    NSString * const mediaTitle = [self displayTitleForMRL:currentMediaMRL
+                                          currentInputItem:currentInputItem];
+
+    if (_mediaLibrary != NULL) {
+        [self updateLibraryItemIdCreatingIfNeeded:YES];
+        if (_libraryItemId > 0) {
+            if (vlc_ml_media_add_bookmark(_mediaLibrary, _libraryItemId, bookmarkTime) != VLC_SUCCESS) {
+                msg_Warn(getIntf(),
+                         "Unable to save bookmark in media library for media %lld at time %lld; storing locally",
+                         _libraryItemId,
+                         bookmarkTime);
+            } else if (vlc_ml_media_update_bookmark(_mediaLibrary,
+                                                    _libraryItemId,
+                                                    bookmarkTime,
+                                                    bookmarkName.UTF8String,
+                                                    NULL) != VLC_SUCCESS) {
+                msg_Warn(getIntf(),
+                         "Unable to set metadata for bookmark %lld on media %lld",
+                         bookmarkTime,
+                         _libraryItemId);
+            }
+        } else {
+            msg_Warn(getIntf(),
+                     "Unable to resolve media library entry for bookmark; storing locally");
+        }
     }
 
+    VLCBookmark * const bookmark =
+        [VLCBookmark bookmarkWithMediaLibraryItemId:_libraryItemId
+                                         mediaTitle:mediaTitle
+                                           mediaMRL:currentMediaMRL
+                                       bookmarkTime:bookmarkTime
+                                       bookmarkName:bookmarkName
+                                bookmarkDescription:@""];
+    [self storeBookmark:bookmark replacingBookmark:nil];
     [self trackBookmarkMediaMRL:currentMediaMRL];
     [self updateBookmarks];
+    [self postDistributedBookmarkStoreDidChangeNotification];
     return YES;
 }
 
 - (void)editBookmark:(VLCBookmark *)bookmark originalBookmark:(VLCBookmark *)originalBookmark
 {
     const int64_t mediaId = originalBookmark.mediaLibraryItemId;
-    if (mediaId <= 0) {
-        return;
-    }
 
-    if (originalBookmark.bookmarkTime != bookmark.bookmarkTime) {
-        if (vlc_ml_media_add_bookmark(_mediaLibrary, mediaId, bookmark.bookmarkTime) != VLC_SUCCESS) {
-            [self updateBookmarks];
-            return;
+    if (_mediaLibrary != NULL && mediaId > 0) {
+        if (originalBookmark.bookmarkTime != bookmark.bookmarkTime) {
+            if (vlc_ml_media_add_bookmark(_mediaLibrary, mediaId, bookmark.bookmarkTime) == VLC_SUCCESS) {
+                vlc_ml_media_remove_bookmark(_mediaLibrary, mediaId, originalBookmark.bookmarkTime);
+                [self removeThumbnailForBookmark:originalBookmark];
+            } else {
+                msg_Warn(getIntf(),
+                         "Unable to update bookmark time in media library for media %lld; storing locally",
+                         mediaId);
+            }
         }
-        vlc_ml_media_remove_bookmark(_mediaLibrary, mediaId, originalBookmark.bookmarkTime);
-        [self removeThumbnailForBookmark:originalBookmark];
+
+        vlc_ml_media_update_bookmark(_mediaLibrary,
+                                     mediaId,
+                                     bookmark.bookmarkTime,
+                                     bookmark.bookmarkName.UTF8String,
+                                     bookmark.bookmarkDescription.UTF8String);
     }
 
-    vlc_ml_media_update_bookmark(_mediaLibrary,
-                                 mediaId,
-                                 bookmark.bookmarkTime,
-                                 bookmark.bookmarkName.UTF8String,
-                                 bookmark.bookmarkDescription.UTF8String);
-
+    [self storeBookmark:bookmark replacingBookmark:originalBookmark];
     [self trackBookmarkMediaMRL:bookmark.mediaMRL];
     [self updateBookmarks];
+    [self postDistributedBookmarkStoreDidChangeNotification];
 }
 
 - (void)removeBookmarkWithTime:(const int64_t)bookmarkTime
 {
-    if (_libraryItemId <= 0) {
-        return;
-    }
-
     for (VLCBookmark * const bookmark in _bookmarks) {
-        if (bookmark.bookmarkTime == bookmarkTime) {
-            [self removeThumbnailForBookmark:bookmark];
+        const BOOL bookmarkMatchesCurrentMedia =
+            bookmark.mediaLibraryItemId == _libraryItemId ||
+            [bookmark.mediaMRL isEqualToString:self.currentPlaybackMRL];
+        if (bookmark.bookmarkTime == bookmarkTime && bookmarkMatchesCurrentMedia) {
+            [self removeBookmark:bookmark];
             break;
         }
     }
-
-    vlc_ml_media_remove_bookmark(_mediaLibrary, _libraryItemId, bookmarkTime);
-    [self updateBookmarks];
 }
 
 - (void)removeBookmark:(VLCBookmark *)bookmark
 {
-    if (bookmark.mediaLibraryItemId <= 0) {
-        return;
-    }
-
     [self removeThumbnailForBookmark:bookmark];
-    vlc_ml_media_remove_bookmark(_mediaLibrary, bookmark.mediaLibraryItemId, bookmark.bookmarkTime);
+    [self removeStoredBookmark:bookmark];
+    if (_mediaLibrary != NULL && bookmark.mediaLibraryItemId > 0) {
+        vlc_ml_media_remove_bookmark(_mediaLibrary, bookmark.mediaLibraryItemId, bookmark.bookmarkTime);
+    }
     [self pruneTrackedBookmarkMediaMRL:bookmark.mediaMRL mediaId:bookmark.mediaLibraryItemId];
     [self updateBookmarks];
+    [self postDistributedBookmarkStoreDidChangeNotification];
 }
 
 - (void)clearBookmarks
@@ -862,10 +1154,14 @@ static const struct vlc_thumbnailer_to_files_cbs bookmarkThumbnailCallbacks = {
         }
     }
     for (NSNumber * const mediaId in mediaIds) {
-        vlc_ml_media_remove_all_bookmarks(_mediaLibrary, mediaId.longLongValue);
+        if (_mediaLibrary != NULL) {
+            vlc_ml_media_remove_all_bookmarks(_mediaLibrary, mediaId.longLongValue);
+        }
     }
+    [self setStoredBookmarkRecords:@[]];
     [self setTrackedBookmarkMediaMRLs:@[]];
     [self updateBookmarks];
+    [self postDistributedBookmarkStoreDidChangeNotification];
 }
 
 @end
