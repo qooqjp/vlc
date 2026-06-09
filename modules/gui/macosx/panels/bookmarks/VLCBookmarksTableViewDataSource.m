@@ -200,8 +200,8 @@ static const struct vlc_thumbnailer_to_files_cbs bookmarkThumbnailCallbacks = {
 {
     self = [super init];
     if (self) {
-        [self setup];
         _tableView = tableView;
+        [self setup];
     }
     return self;
 }
@@ -244,6 +244,7 @@ static const struct vlc_thumbnailer_to_files_cbs bookmarkThumbnailCallbacks = {
     _thumbnailFileExtension = _canGenerateBookmarkThumbnails ? toNSStr(thumbnailFileExtension) : @"jpg";
 
     [self updateLibraryItemId];
+    [self updateBookmarks];
 
     [NSNotificationCenter.defaultCenter addObserver:self
                                            selector:@selector(currentMediaItemChanged:)
@@ -860,6 +861,16 @@ static const struct vlc_thumbnailer_to_files_cbs bookmarkThumbnailCallbacks = {
     }
 
     NSMutableArray<NSString *> * const trackedMRLs = self.trackedBookmarkMediaMRLs.mutableCopy;
+
+    for (NSString * const bookmarkKey in orderedKeys) {
+        VLCBookmark * const bookmark = bookmarksByKey[bookmarkKey];
+        if (bookmark != nil &&
+            bookmark.mediaMRL.length > 0 &&
+            ![trackedMRLs containsObject:bookmark.mediaMRL]) {
+            [trackedMRLs addObject:bookmark.mediaMRL];
+        }
+    }
+
     NSString * const currentMediaMRL = [self currentPlaybackMRL];
     if (currentMediaMRL.length > 0 && ![trackedMRLs containsObject:currentMediaMRL]) {
         [trackedMRLs addObject:currentMediaMRL];
@@ -927,6 +938,7 @@ static const struct vlc_thumbnailer_to_files_cbs bookmarkThumbnailCallbacks = {
 - (void)currentMediaItemChanged:(NSNotification * const)notification
 {
     [self updateLibraryItemId];
+    [self updateBookmarks];
 }
 
 - (void)setLibraryItemId:(const int64_t)libraryItemId
@@ -936,7 +948,6 @@ static const struct vlc_thumbnailer_to_files_cbs bookmarkThumbnailCallbacks = {
     }
 
     _libraryItemId = libraryItemId;
-    [self updateBookmarks];
 }
 
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView

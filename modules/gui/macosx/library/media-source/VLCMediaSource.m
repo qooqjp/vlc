@@ -418,6 +418,11 @@ static const char *const myFoldersDescription = "My Folders";
 
         // Clear pre-existing child nodes
         while (directoryNode->i_children > 0) {
+            if (directoryNode->pp_children == NULL) {
+                NSLog(@"VLCMediaSource: pp_children NULL with i_children=%d, aborting cleanup",
+                      directoryNode->i_children);
+                break;
+            }
             input_item_node_t * const childNode = directoryNode->pp_children[0];
             input_item_node_RemoveNode(directoryNode, childNode);
             input_item_node_Delete(childNode);

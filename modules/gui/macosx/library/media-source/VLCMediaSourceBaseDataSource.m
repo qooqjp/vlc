@@ -626,16 +626,7 @@ referenceSizeForHeaderInSection:(NSInteger)section
 - (void)reloadDataForNotification:(NSNotification *)aNotification
 {
     if (self.viewMode == VLCLibraryGridViewModeSegment) {
-        if (self.collectionView.dataSource == self) {
-            const NSInteger index = [_mediaSources indexOfObject:aNotification.object];
-            if (self.collectionView.numberOfSections > index) {
-                [self.collectionView reloadSections:[NSIndexSet indexSetWithIndex:index]];
-            } else {
-                [self.collectionView reloadData];
-            }
-        } else {
-            [self.collectionView reloadData];
-        }
+        [self.collectionView reloadData];
     } else {
         [self.tableView reloadData];
     }
